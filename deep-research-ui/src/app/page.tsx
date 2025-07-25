@@ -5,6 +5,7 @@ import { Send, Plus, MessageSquare, Upload, X, Bot, User, Settings, ExternalLink
 import { logger } from '@/lib/logger'
 import { LogViewer } from '@/components/LogViewer'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { DeepResearchProgress } from '@/components/CircularProgress'
 import { conversationStorage, type Conversation, type Message } from '@/lib/conversationStorage'
 
 // 定义对话消息类型接口
@@ -14,14 +15,23 @@ interface ConversationMessage {
   timestamp?: string;
 }
 
+// 进度状态接口
+interface ProgressState {
+  stage: string;
+  progress: number;
+  details?: string;
+}
+
 export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [progressState, setProgressState] = useState<ProgressState | null>(null)
   const [selectedImage, setSelectedImage] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [useRealAgent, setUseRealAgent] = useState(true)
+  const [useStreamMode, setUseStreamMode] = useState(true) // 新增：是否使用流式模式
   const [showSettings, setShowSettings] = useState(false)
   const [showLogViewer, setShowLogViewer] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -100,15 +110,15 @@ export default function Home() {
     const data = conversationStorage.exportConversations()
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `对话历史_${new Date().toISOString().split('T')[0]}.json`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `deep-research-conversations-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
     URL.revokeObjectURL(url)
     
-    logger.info('导出对话历史', { count: conversations.length }, 'ui', 'frontend')
+    logger.info('导出对话数据', { count: conversations.length }, 'ui', 'frontend')
   }
 
   const importConversations = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -119,31 +129,23 @@ export default function Home() {
     reader.onload = (e) => {
       try {
         const data = e.target?.result as string
-        if (conversationStorage.importConversations(data)) {
-          const imported = conversationStorage.loadConversations()
-          setConversations(imported)
-          logger.info('导入对话历史成功', { count: imported.length }, 'ui', 'frontend')
-          alert('导入成功！')
-        } else {
-          throw new Error('导入失败')
-        }
+        const importedData = conversationStorage.importConversations(data)
+        setConversations(importedData)
+        
+        logger.info('导入对话数据成功', { count: importedData.length }, 'ui', 'frontend')
       } catch (error) {
-        logger.error('导入对话历史失败', error, 'ui', 'frontend')
-        alert('导入失败，请检查文件格式！')
+        logger.error('导入对话数据失败', { error: error instanceof Error ? error.message : String(error) }, 'ui', 'frontend')
+        alert('导入失败：文件格式不正确')
       }
     }
     reader.readAsText(file)
-    
-    // 重置文件输入
-    if (importInputRef.current) {
-      importInputRef.current.value = ''
-    }
   }
 
-  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file && file.type.startsWith('image/')) {
       setSelectedImage(file)
+      
       const reader = new FileReader()
       reader.onload = (e) => {
         setImagePreview(e.target?.result as string)
@@ -166,6 +168,135 @@ export default function Home() {
     }
     
     logger.info('移除选中图片', {}, 'ui', 'frontend')
+  }
+
+  // 流式Deep Research处理
+  const sendMessageStream = async (currentInput: string, currentConversationId: string, conversationHistory: ConversationMessage[]) => {
+    const startTime = Date.now()
+    const apiEndpoint = '/api/integration-stream'
+    const method = 'POST'
+    
+    logger.apiCall(method, apiEndpoint, {
+      message: currentInput,
+      conversationId: currentConversationId,
+      useStreamMode: true
+    })
+
+    try {
+      const response = await fetch(apiEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: currentInput,
+          conversationId: currentConversationId,
+          conversationHistory
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        throw new Error('无法创建流式读取器')
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        
+        if (done) break
+
+        const chunk = decoder.decode(value)
+        const lines = chunk.split('\n')
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              
+              if (data.type === 'progress') {
+                // 更新进度状态
+                setProgressState({
+                  stage: data.stage,
+                  progress: data.progress,
+                  details: data.details
+                })
+              } else if (data.type === 'result') {
+                // 处理最终结果
+                const duration = Date.now() - startTime
+                
+                logger.apiResponse(method, apiEndpoint, 200, {
+                  responseLength: data.response?.length || 0,
+                  citationsCount: data.citations?.length || 0,
+                  isRealAgent: data.isRealAgent,
+                  processingTime: data.duration
+                }, duration)
+
+                const assistantMessage: Message = {
+                  id: (Date.now() + 1).toString(),
+                  content: data.response,
+                  role: 'assistant',
+                  timestamp: new Date(),
+                  citations: data.citations,
+                  isRealAgent: data.isRealAgent,
+                  processingTime: data.duration
+                }
+
+                setConversations(prev =>
+                  prev.map(conv =>
+                    conv.id === currentConversationId
+                      ? { ...conv, messages: [...conv.messages, assistantMessage], updatedAt: new Date() }
+                      : conv
+                  )
+                )
+                
+                // 清除进度状态
+                setProgressState(null)
+                
+              } else if (data.type === 'error') {
+                // 处理错误
+                throw new Error(data.error)
+              }
+            } catch (e) {
+              // 忽略JSON解析错误
+            }
+          }
+        }
+      }
+    } catch (error) {
+      const duration = Date.now() - startTime
+      
+      logger.apiError(
+        method,
+        apiEndpoint,
+        error instanceof Error ? error : new Error(String(error)),
+        duration
+      )
+      
+      // 清除进度状态
+      setProgressState(null)
+      
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `❌ Deep Research处理失败: ${error instanceof Error ? error.message : String(error)}`,
+        role: 'assistant',
+        timestamp: new Date(),
+        isRealAgent: false
+      }
+
+      setConversations(prev =>
+        prev.map(conv =>
+          conv.id === currentConversationId
+            ? { ...conv, messages: [...conv.messages, errorMessage], updatedAt: new Date() }
+            : conv
+        )
+      )
+    }
   }
 
   const sendMessage = async () => {
@@ -198,112 +329,106 @@ export default function Home() {
     )
 
     const currentInput = input
-    const apiEndpoint = useRealAgent ? '/api/integration' : '/api/chat'
-    const method = 'POST'
-    
     setInput('')
     removeImage()
     setIsLoading(true)
 
-    // 记录API调用开始
-    const startTime = Date.now()
-    logger.apiCall(method, apiEndpoint, {
-      message: currentInput,
-      conversationId: currentConversationId,
-      hasImage: !!selectedImage,
-      useRealAgent
-    })
+    // 构建对话历史
+    const conversationHistory = currentConversation ? [...currentConversation.messages, userMessage] : [userMessage]
+    const historyForApi = conversationHistory.map(msg => ({
+      role: msg.role,
+      content: msg.content,
+      timestamp: msg.timestamp.toISOString()
+    }))
 
     try {
-      let requestBody: {
-        message: string;
-        conversationId: string;
-        conversationHistory: ConversationMessage[];
-      } | undefined;
-      let response: Response
-
-      if (useRealAgent) {
-        // 使用真实Agent - JSON请求，包含完整对话历史
-        const conversationHistory = currentConversation ? [...currentConversation.messages, userMessage] : [userMessage]
+      if (useRealAgent && useStreamMode) {
+        // 使用流式Deep Research
+        await sendMessageStream(currentInput, currentConversationId, historyForApi)
+      } else {
+        // 使用传统方式（兼容性保留）
+        const apiEndpoint = useRealAgent ? '/api/integration' : '/api/chat'
+        const method = 'POST'
+        const startTime = Date.now()
         
-        requestBody = {
+        logger.apiCall(method, apiEndpoint, {
           message: currentInput,
           conversationId: currentConversationId,
-          conversationHistory: conversationHistory.map(msg => ({
-            role: msg.role,
-            content: msg.content,
-            timestamp: msg.timestamp.toISOString()
-          }))
-        }
-        response = await fetch(apiEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody)
+          hasImage: !!selectedImage,
+          useRealAgent
         })
-      } else {
-        // 使用模拟模式 - FormData请求（支持图片）
-        const formData = new FormData()
-        formData.append('message', currentInput)
-        formData.append('conversationId', currentConversationId)
-        if (selectedImage) {
-          formData.append('image', selectedImage)
+
+        let response: Response
+
+        if (useRealAgent) {
+          response = await fetch(apiEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              message: currentInput,
+              conversationId: currentConversationId,
+              conversationHistory: historyForApi
+            })
+          })
+        } else {
+          const formData = new FormData()
+          formData.append('message', currentInput)
+          formData.append('conversationId', currentConversationId)
+          if (selectedImage) {
+            formData.append('image', selectedImage)
+          }
+          response = await fetch(apiEndpoint, {
+            method: 'POST',
+            body: formData
+          })
         }
-        response = await fetch(apiEndpoint, {
-          method: 'POST',
-          body: formData
-        })
-      }
 
-      const duration = Date.now() - startTime
+        const duration = Date.now() - startTime
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        }
 
-      const data = await response.json()
-      
-      // 记录API响应成功
-      logger.apiResponse(method, apiEndpoint, response.status, {
-        responseLength: data.response?.length || 0,
-        citationsCount: data.citations?.length || 0,
-        isRealAgent: data.isRealAgent
-      }, duration)
+        const data = await response.json()
+        
+        logger.apiResponse(method, apiEndpoint, response.status, {
+          responseLength: data.response?.length || 0,
+          citationsCount: data.citations?.length || 0,
+          isRealAgent: data.isRealAgent
+        }, duration)
 
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: data.response,
-        role: 'assistant',
-        timestamp: new Date(),
-        citations: data.citations,
-        isRealAgent: data.isRealAgent
-      }
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          content: data.response,
+          role: 'assistant',
+          timestamp: new Date(),
+          citations: data.citations,
+          isRealAgent: data.isRealAgent
+        }
 
-      setConversations(prev =>
-        prev.map(conv =>
-          conv.id === currentConversationId
-            ? { ...conv, messages: [...conv.messages, assistantMessage], updatedAt: new Date() }
-            : conv
+        setConversations(prev =>
+          prev.map(conv =>
+            conv.id === currentConversationId
+              ? { ...conv, messages: [...conv.messages, assistantMessage], updatedAt: new Date() }
+              : conv
+          )
         )
-      )
+      }
     } catch (error) {
-      const duration = Date.now() - startTime
+      logger.error('发送消息失败', { 
+        error: error instanceof Error ? error.message : String(error),
+        useRealAgent,
+        useStreamMode
+      }, 'ui', 'frontend')
       
-      // 记录API错误
-      logger.apiError(
-        method,
-        apiEndpoint,
-        error instanceof Error ? error : new Error(String(error)),
-        duration
-      )
-      
-      console.error('发送消息失败:', error)
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: `抱歉，发送消息时出现错误：${error instanceof Error ? error.message : '未知错误'}，请稍后重试。`,
+        content: `❌ 发送失败: ${error instanceof Error ? error.message : String(error)}`,
         role: 'assistant',
-        timestamp: new Date()
+        timestamp: new Date(),
+        isRealAgent: false
       }
 
       setConversations(prev =>
@@ -315,6 +440,7 @@ export default function Home() {
       )
     } finally {
       setIsLoading(false)
+      setProgressState(null)
     }
   }
 
@@ -359,27 +485,27 @@ export default function Home() {
           {/* 设置面板 */}
           {showSettings && (
             <div className="mb-3 p-3 bg-gray-800 rounded-lg">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm">使用真实Agent</span>
-                <button
-                  onClick={() => {
-                    const newValue = !useRealAgent
-                    setUseRealAgent(newValue)
-                    logger.info(`切换Agent模式`, { 
-                      useRealAgent: newValue, 
-                      mode: newValue ? '真实Agent' : '演示模式' 
-                    }, 'ui', 'frontend')
-                  }}
-                  className={`w-12 h-6 rounded-full transition-colors ${
-                    useRealAgent ? 'bg-blue-600' : 'bg-gray-600'
-                  }`}
-                >
-                  <div
-                    className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                      useRealAgent ? 'translate-x-6' : 'translate-x-0.5'
-                    }`}
+              <div className="flex gap-2 mb-3">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useRealAgent}
+                    onChange={(e) => setUseRealAgent(e.target.checked)}
+                    className="sr-only"
                   />
-                </button>
+                  <div
+                    className={`w-11 h-6 rounded-full transition-colors ${
+                      useRealAgent ? 'bg-blue-600' : 'bg-gray-600'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                        useRealAgent ? 'translate-x-6' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </div>
+                </label>
+                <span className="text-sm text-gray-300">使用真实Agent</span>
               </div>
               <p className="text-xs text-gray-400 mb-3">
                 {useRealAgent 
@@ -387,6 +513,40 @@ export default function Home() {
                   : '使用模拟模式（支持图片上传）'
                 }
               </p>
+              
+              {/* 流式模式切换 */}
+              {useRealAgent && (
+                <>
+                  <div className="flex gap-2 mb-3">
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={useStreamMode}
+                        onChange={(e) => setUseStreamMode(e.target.checked)}
+                        className="sr-only"
+                      />
+                      <div
+                        className={`w-11 h-6 rounded-full transition-colors ${
+                          useStreamMode ? 'bg-green-600' : 'bg-gray-600'
+                        }`}
+                      >
+                        <div
+                          className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                            useStreamMode ? 'translate-x-6' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </div>
+                    </label>
+                    <span className="text-sm text-gray-300">流式进度模式</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-3">
+                    {useStreamMode 
+                      ? '实时显示Deep Research分析进度' 
+                      : '传统模式（等待完整结果）'
+                    }
+                  </p>
+                </>
+              )}
               
               {/* 导出/导入按钮 */}
               <div className="flex gap-2 mb-3">
@@ -566,13 +726,25 @@ export default function Home() {
                     >
                       <span>{message.timestamp.toLocaleTimeString()}</span>
                       {message.role === 'assistant' && (
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          message.isRealAgent 
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-gray-100 text-gray-600'
-                        }`}>
-                          {message.isRealAgent ? '真实Agent' : '模拟'}
-                        </span>
+                        <div className="flex gap-1">
+                          <span className={`px-2 py-0.5 rounded text-xs ${
+                            message.isRealAgent 
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {message.isRealAgent ? '真实Agent' : '模拟'}
+                          </span>
+                          {message.isRealAgent && (
+                            <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700">
+                              🔬 Deep Research
+                            </span>
+                          )}
+                          {message.processingTime && (
+                            <span className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700">
+                              ⏱️ {message.processingTime.toFixed(1)}秒
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -591,13 +763,33 @@ export default function Home() {
                     <Bot size={16} className="text-white" />
                   </div>
                   <div className="bg-white border border-gray-200 p-4 rounded-2xl">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                    </div>
+                    {progressState ? (
+                      <DeepResearchProgress
+                        stage={progressState.stage}
+                        progress={progressState.progress}
+                        details={progressState.details}
+                      />
+                    ) : (
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                      </div>
+                    )}
                     <div className="text-xs text-gray-500 mt-2">
-                      {useRealAgent ? '正在进行深度研究...' : '正在处理...'}
+                      {useRealAgent ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                            <span>🔬 Deep Research模型正在分析...</span>
+                          </div>
+                          <div className="text-xs text-gray-400">
+                            使用 o3-deep-research 进行深度研究（可能需要2-3分钟）
+                          </div>
+                        </div>
+                      ) : (
+                        '正在处理...'
+                      )}
                     </div>
                   </div>
                 </div>
@@ -627,7 +819,7 @@ export default function Home() {
                 <input
                   type="file"
                   ref={fileInputRef}
-                  onChange={handleImageSelect}
+                  onChange={handleImageUpload}
                   accept="image/*"
                   className="hidden"
                 />
