@@ -378,6 +378,9 @@ if __name__ == "__main__":
           
           sendProgress('文件准备', 15, '创建临时执行文件...')
           await writeFile(tempFilePath, tempScript, 'utf8')
+          
+          // 添加短暂延迟确保文件系统同步
+          await new Promise(resolve => setTimeout(resolve, 100))
 
           // 验证文件创建
           try {

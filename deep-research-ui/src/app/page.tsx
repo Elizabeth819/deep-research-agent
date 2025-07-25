@@ -173,7 +173,7 @@ export default function Home() {
   // 流式Deep Research处理
   const sendMessageStream = async (currentInput: string, currentConversationId: string, conversationHistory: ConversationMessage[]) => {
     const startTime = Date.now()
-    const apiEndpoint = '/api/integration-stream'
+    const apiEndpoint = '/api/integration-stream/'  // 添加尾斜杠
     const method = 'POST'
     
     logger.apiCall(method, apiEndpoint, {
