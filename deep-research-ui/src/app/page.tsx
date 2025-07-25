@@ -7,6 +7,13 @@ import { LogViewer } from '@/components/LogViewer'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { conversationStorage, type Conversation, type Message } from '@/lib/conversationStorage'
 
+// 定义对话消息类型接口
+interface ConversationMessage {
+  role: string;
+  content: string;
+  timestamp?: string;
+}
+
 export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null)
@@ -208,7 +215,11 @@ export default function Home() {
     })
 
     try {
-      let requestBody: any
+      let requestBody: {
+        message: string;
+        conversationId: string;
+        conversationHistory: ConversationMessage[];
+      } | undefined;
       let response: Response
 
       if (useRealAgent) {
@@ -280,7 +291,12 @@ export default function Home() {
       const duration = Date.now() - startTime
       
       // 记录API错误
-      logger.apiError(method, apiEndpoint, error, duration)
+      logger.apiError(
+        method,
+        apiEndpoint,
+        error instanceof Error ? error : new Error(String(error)),
+        duration
+      )
       
       console.error('发送消息失败:', error)
       const errorMessage: Message = {

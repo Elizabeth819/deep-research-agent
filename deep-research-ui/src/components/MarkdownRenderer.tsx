@@ -73,7 +73,8 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
           ),
           
           // 代码样式
-          code: ({ inline, children, className, ...props }: any) => {
+          code: (props: React.HTMLAttributes<HTMLElement> & { inline?: boolean }) => {
+            const { inline, children, className, ...rest } = props;
             if (inline) {
               return (
                 <code className="bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded text-sm font-mono">
@@ -82,7 +83,7 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
               )
             }
             return (
-              <code className={`${className} block`} {...props}>
+              <code className={`${className} block`} {...rest}>
                 {children}
               </code>
             )

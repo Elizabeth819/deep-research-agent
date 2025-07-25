@@ -60,7 +60,7 @@ export function LogViewer({ isOpen, onClose }: LogViewerProps) {
     return timestamp.toLocaleTimeString() + '.' + timestamp.getMilliseconds().toString().padStart(3, '0')
   }
 
-  const formatData = (data: any) => {
+  const formatData = (data: unknown) => {
     if (!data) return null
     try {
       return JSON.stringify(data, null, 2)
@@ -198,16 +198,16 @@ export function LogViewer({ isOpen, onClose }: LogViewerProps) {
                   {log.message}
                 </div>
 
-                {log.data && (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-700">
-                      查看详细数据
-                    </summary>
-                    <pre className="mt-2 p-2 bg-gray-100 rounded text-xs overflow-auto max-h-40">
-                      {formatData(log.data)}
-                    </pre>
-                  </details>
-                )}
+                {typeof log.data !== 'undefined' && log.data !== null && (
+  <details className="mt-2">
+    <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-700">
+      查看详细数据
+    </summary>
+    <pre className="mt-2 p-2 bg-gray-100 rounded text-xs overflow-auto max-h-40">
+      {formatData(log.data)}
+    </pre>
+  </details>
+)}
               </div>
             ))
           )}

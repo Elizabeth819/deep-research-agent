@@ -1,0 +1,35 @@
+{
+  "name": "turing-doctor",
+  "version": "1.0.0",
+  "description": "AI智能助手桌面版",
+  "main": "main.js",
+  "build": {
+    "appId": "com.turing.doctor.agent",
+    "productName": "图灵博士",
+    "files": [
+      "main.js",
+      "turing-doctor-icon.png"
+    ],
+    "directories": {
+      "buildResources": "."
+    },
+    "mac": {
+      "icon": "turing-doctor-icon.png",
+      "category": "public.app-category.productivity"
+    }
+  },
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --mac"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "auto-launch": "^5.0.6",
+    "electron": "^37.2.4",
+    "electron-builder": "^26.0.12"
+  }
+}

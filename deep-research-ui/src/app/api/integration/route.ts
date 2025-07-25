@@ -6,7 +6,7 @@ import { join } from 'path'
 import { constants } from 'fs'
 
 // 服务端日志函数
-function serverLog(level: 'info' | 'warn' | 'error' | 'debug', message: string, data?: any) {
+function serverLog(level: 'info' | 'warn' | 'error' | 'debug', message: string, data?: unknown) {
   const timestamp = new Date().toISOString()
   const logEntry = {
     timestamp,
@@ -21,6 +21,11 @@ function serverLog(level: 'info' | 'warn' | 'error' | 'debug', message: string, 
   // 可以扩展到文件日志或外部日志服务
   return logEntry
 }
+
+// 在文件顶部添加环境变量读取
+const AI_FOUNDRY_PROJECT_ENDPOINT = process.env.AI_FOUNDRY_PROJECT_ENDPOINT || "https://wanme-mcyg2lf0-westus.services.ai.azure.com/api/projects/deep-research-agent";
+const AI_AGENT_MODEL = process.env.AI_AGENT_MODEL || "gpt-4o";
+const AI_AGENT_NAME = process.env.AI_AGENT_NAME || "deep-research-agent";
 
 // 集成真实的Deep Research Agent
 export async function POST(request: NextRequest) {
@@ -52,7 +57,7 @@ export async function POST(request: NextRequest) {
     serverLog('info', '开始创建Python脚本', { requestId })
 
     // 构建对话历史的Python代码
-    const buildConversationHistoryPython = (history: any[]) => {
+    const buildConversationHistoryPython = (history: ConversationMessage[]) => {
       if (!history || history.length === 0) {
         return '                # 无历史对话'
       }
@@ -117,7 +122,7 @@ def main():
         os.environ.setdefault('AZURE_CLIENT_TIMEOUT', '30')
         
         project_client = AIProjectClient(
-            endpoint="https://wanme-mcyg2lf0-westus.services.ai.azure.com/api/projects/deep-research-agent",
+            endpoint="${AI_FOUNDRY_PROJECT_ENDPOINT}",
             credential=DefaultAzureCredential(),
         )
         python_log('info', 'Azure项目客户端初始化成功')
@@ -148,8 +153,8 @@ def main():
                 python_log('info', '开始创建Agent')
                 # Create a new agent
                 agent = agents_client.create_agent(
-                    model="gpt-4o",
-                    name="deep-research-agent",
+                    model="${AI_AGENT_MODEL}",
+                    name="${AI_AGENT_NAME}",
                     instructions="""你是一个专业的AI研究助手，具有多轮对话能力，能够进行深度研究和分析。请遵循以下指导原则：
 1. 使用中文回复
 2. 记住之前的对话内容，保持对话连贯性
@@ -556,4 +561,11 @@ function generateFallbackResponse(message: string): string {
 如需获得基于实时数据的完整研究报告，请稍后重试或联系系统管理员。
 
 您希望我从哪个角度来深入分析这个话题？`
+} 
+
+// 定义对话消息类型接口
+interface ConversationMessage {
+  role: string;
+  content: string;
+  timestamp?: string;
 } 
